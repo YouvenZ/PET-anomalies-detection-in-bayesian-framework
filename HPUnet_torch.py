@@ -9,108 +9,6 @@ from unet_utils import *
 import torch.nn.functional as F
 
 
-# class Interpolate(nn.Module):
-#     def __init__(self, scale_factor, mode):
-#         super(Interpolate, self).__init__()
-#         self.interp = nn.functional.interpolate
-#         self.scale_factor = scale_factor
-#         self.mode = mode
-
-#     def forward(self, x):
-#         x = self.interp(x, scale_factor=self.scale_factor, mode=self.mode, align_corners=False)
-#         return x
-
-########################################################
-#                                                      #
-#              Classifier model                        #
-#                                                      #
-########################################################
-
-
-class Classifier(nn.Module):
-
-
-    def __init__(self, cf, conv):
-        """
-        Builds the classifier sub-network.
-        """
-        super(Classifier, self).__init__()
-        self.dim = conv.dim
-        self.n_classes = cf.head_classes
-        n_input_channels = cf.end_filts
-        n_features = cf.n_rpn_features
-        n_output_channels = cf.n_anchors_per_pos * cf.head_classes
-        anchor_stride = cf.rpn_anchor_stride
-
-        self.conv_1 = conv(n_input_channels, n_features, ks=3, stride=anchor_stride, pad=1, relu=cf.relu)
-        self.conv_2 = conv(n_features, n_features, ks=3, stride=anchor_stride, pad=1, relu=cf.relu)
-        self.conv_3 = conv(n_features, n_features, ks=3, stride=anchor_stride, pad=1, relu=cf.relu)
-        self.conv_4 = conv(n_features, n_features, ks=3, stride=anchor_stride, pad=1, relu=cf.relu)
-        self.conv_final = conv(n_features, n_output_channels, ks=3, stride=anchor_stride, pad=1, relu=None)
-
-
-    def forward(self, x):
-        """
-        :param x: input feature map (b, in_c, y, x, (z))
-        :return: class_logits (b, n_anchors, n_classes)
-        """
-        x = self.conv_1(x)
-        x = self.conv_2(x)
-        x = self.conv_3(x)
-        x = self.conv_4(x)
-        class_logits = self.conv_final(x)
-
-        axes = (0, 2, 3, 1) if self.dim == 2 else (0, 2, 3, 4, 1)
-        class_logits = class_logits.permute(*axes)
-        class_logits = class_logits.contiguous()
-        class_logits = class_logits.view(x.size()[0], -1, self.n_classes)
-
-        return [class_logits]
-
-########################################################
-#                                                      #
-#              Regression model                        #
-#                                                      #
-########################################################
-
-class BBRegressor(nn.Module):
-
-
-    def __init__(self, cf, conv):
-        """
-        Builds the bb-regression sub-network.
-        """
-        super(BBRegressor, self).__init__()
-        self.dim = conv.dim
-        n_input_channels = cf.end_filts
-        n_features = cf.n_rpn_features
-        n_output_channels = cf.n_anchors_per_pos * self.dim * 2
-        anchor_stride = cf.rpn_anchor_stride
-
-        self.conv_1 = conv(n_input_channels, n_features, ks=3, stride=anchor_stride, pad=1, relu=cf.relu)
-        self.conv_2 = conv(n_features, n_features, ks=3, stride=anchor_stride, pad=1, relu=cf.relu)
-        self.conv_3 = conv(n_features, n_features, ks=3, stride=anchor_stride, pad=1, relu=cf.relu)
-        self.conv_4 = conv(n_features, n_features, ks=3, stride=anchor_stride, pad=1, relu=cf.relu)
-        self.conv_final = conv(n_features, n_output_channels, ks=3, stride=anchor_stride,
-                               pad=1, relu=None)
-
-    def forward(self, x):
-        """
-        :param x: input feature map (b, in_c, y, x, (z))
-        :return: bb_logits (b, n_anchors, dim * 2) / dim = 2 or 3 
-        """
-        x = self.conv_1(x)
-        x = self.conv_2(x)
-        x = self.conv_3(x)
-        x = self.conv_4(x)
-        bb_logits = self.conv_final(x)
-
-        axes = (0, 2, 3, 1) if self.dim == 2 else (0, 2, 3, 4, 1)
-        bb_logits = bb_logits.permute(*axes)
-        bb_logits = bb_logits.contiguous()
-        bb_logits = bb_logits.view(x.size()[0], -1, self.dim * 2)
-
-        return [bb_logits]
 ########################################################
 #                                                      #
 #              HierarchicalCore model                  #
@@ -132,7 +30,7 @@ class Hierarchical_Core(nn.Module):
         conv = NDConvGenerator(self.dim)
         self._latent_dims = (1,1,1,1)
 
-        number_of_classes = 6
+        number_of_classes = 2
         self.input_channels=input_channels
 
         if Posterior:
@@ -151,6 +49,7 @@ class Hierarchical_Core(nn.Module):
         else:
             self._down_channels_per_block = down_channels_per_block
         self.residual_block = Residual_block
+        self.probabilistic_block = Probabilistic_block(dim=self.dim,channels_per_block=self._channels_per_block)
         self.Pool_layers = nn.ModuleList()
         self.list_test=[]
         self.decoder_layers=nn.ModuleList()
@@ -161,14 +60,6 @@ class Hierarchical_Core(nn.Module):
             self.interpolate = Interpolate(2,mode="bilinear")
         else:
             self.interpolate = Interpolate(2,mode="trilinear")
-
-        ##### Probabilistic blocks
-        self.probabilistic_layers.append(conv(self._channels_per_block[-1], 2*self._latent_dims[0], ks=1, stride=1, norm=None, relu=None))
-        for level in range(1,self.num_latent_levels):
-            latent_dims = self._latent_dims[level]
-            self.probabilistic_layers.append(conv(2*latent_dims, 2*latent_dims, ks=1, stride=1, norm=None, relu=None))
-
-
 
         ####### decoder layers
         for probabilistic_level in range(self.num_latent_levels):
@@ -250,19 +141,18 @@ class Hierarchical_Core(nn.Module):
             self.next_decoder_layers.append(nn.Sequential(*next_d_layers)) 
 
         
-        self.probabilistic_layers = nn.Sequential(*self.probabilistic_layers)
         self.decoder_layers = nn.Sequential(*self.decoder_layers)
         self.next_decoder_layers = nn.Sequential(*self.next_decoder_layers)
 
-        print("++++++++++++++++++++++")
+        #print("++++++++++++++++++++++")
 
-        print(self.decoder_layers)
-        print("++++++++++++++++++++++")
-        print(self.probabilistic_layers)
-        print("++++++++++++++++++++++")
+        #print(self.decoder_layers)
+        # print("++++++++++++++++++++++")
+        # print(self.probabilistic_layers)
+        # print("++++++++++++++++++++++")
 
-        print(self.next_decoder_layers)
-        print("++++++++++++++++++++++")
+        # print(self.next_decoder_layers)
+        # print("++++++++++++++++++++++")
 
                 
         # print(self.decoder_layers,len(self.decoder_layers))
@@ -283,23 +173,23 @@ class Hierarchical_Core(nn.Module):
                 features=self.Pool_layers[i](features)
 
         decoder_features = blocks[-1]
-        print(decoder_features.shape,1)
+        #print(decoder_features.shape,1)
 
 
         for proba_level in range(self.num_latent_levels):
             #print(proba_level)
             latent_dim = self._latent_dims[proba_level]
-            mu_log_sigma = self.probabilistic_layers(decoder_features)
-            print(mu_log_sigma.shape,"mu logsigma shape")
+            mu_log_sigma = self.probabilistic_block(decoder_features)
+            #print(mu_log_sigma.shape,"mu logsigma shape")
 
             # mu_log_sigma = torch.squeeze(mu_log_sigma,dim=1)
             # print(mu_log_sigma.shape,"mu logsigma shape squeeze")
             # print(mu_log_sigma[Ellipsis,:latent_dim].shape,"mu  shape Ellipsis")
             # print(mu_log_sigma[Ellipsis,latent_dim:].shape,"logsigma shape Ellipsis")
             mu = mu_log_sigma[:,:latent_dim]
-            print("mu shape:",mu.shape)
+            #print("mu shape:",mu.shape)
             log_sigma = mu_log_sigma[:,latent_dim:]
-            print("Logsigma shape:",log_sigma.shape)
+            #print("Logsigma shape:",log_sigma.shape)
 
 
 
@@ -314,13 +204,13 @@ class Hierarchical_Core(nn.Module):
         
             if z_q is not None:
                 z = z_q[proba_level]
-                print(z.shape,"z_q")
+                #print(z.shape,"z_q")
             elif mean[proba_level]:
                 z = dist.base_dist.loc
-                print(z.shape,"Proba level")
+                #print(z.shape,"Proba level")
             else:
                 z = dist.sample()
-                print(z.shape,"else")
+                #print(z.shape,"else")
             used_latents.append(z)
             # print(z.shape,"sample shape")
             decoder_output_lo = torch.cat([z, decoder_features], axis=1)
@@ -348,6 +238,9 @@ class Hierarchical_Core(nn.Module):
 
 
 class StitchingDecoder(nn.Module):
+
+
+    
     def __init__(self, dim,latent_dims,input_channels,channels_per_block, num_classes,
                down_channels_per_block=None, convs_per_block=3,
                blocks_per_level=3):
@@ -370,13 +263,10 @@ class StitchingDecoder(nn.Module):
             self.interpolate = Interpolate(2,mode="bilinear")
         else:
             self.interpolate = Interpolate(2,mode="trilinear")
-
         self.residual_block = Residual_block
-        # self.Hieararchical_core = Hierarchical_Core(dim=self.dim,input_channels=list(self.input_channels),channels_per_block=list(self._channels_per_block),
-        #        down_channels_per_block=list(self._down_channels_per_block), convs_per_block=3,
-        #        blocks_per_level=3,Posterior=False)
-
         self.decoder_feat = nn.ModuleList()
+
+        
         num_latents = len(self._latent_dims)    
         start_level = num_latents + 1
         num_levels = len(self._channels_per_block)
@@ -537,7 +427,7 @@ class HierarchicalProbUNet(nn.Module):
                             decoder_features=decoder_features)
 
 
-    def kl(self, seg, img):
+    def kl_divergence_(self, seg, img):
 
         """Kullback-Leibler divergence between the posterior and the prior.
         Args:
@@ -553,29 +443,29 @@ class HierarchicalProbUNet(nn.Module):
 
         q_dists = posterior_out['distributions']
         p_dists = prior_out['distributions']
-        print(np.array(q_dists).shape,np.array(p_dists).shape,"here")
+        #print(np.array(q_dists).shape,np.array(p_dists).shape,"here")
 
 
         kl_dict = {}
         for level, (q, p) in enumerate(zip(q_dists, p_dists)):
-            print(q.event_shape,"++++++",q.batch_shape)
-            print("++++++++++++++++++++++++++")
-            print(p.event_shape,"++++++",p.batch_shape)
+            # print(q.event_shape,"++++++",q.batch_shape)
+            # print("++++++++++++++++++++++++++")
+            # print(p.event_shape,"++++++",p.batch_shape)
         # Shape (b, h, w).
             kl_per_pixel = kl.kl_divergence(q, p)
-            print(kl_per_pixel.shape, "kl_per_pixel")
+            # print(kl_per_pixel.shape, "kl_per_pixel")
             # Shape (b,).
             if self.dim == 2:
                 kl_per_instance = torch.sum(kl_per_pixel, dim=[1, 2])
-                print(kl_per_instance.shape)
+                
             else:
                 kl_per_instance = torch.sum(kl_per_pixel, dim=[1 ,2, 3])
-                print(kl_per_instance.shape)
+                
 
             # Shape (1,).
             kl_dict[level] = torch.mean(kl_per_instance)
         # return kl_dict
-        print(kl_dict)
+        #print(kl_dict)
 
         return torch.sum(torch.stack([kl for _, kl in kl_dict.items()], axis=-1))
 
@@ -585,10 +475,9 @@ class HierarchicalProbUNet(nn.Module):
         """
 
         self.beta = 9
-        self.kl = self.kl(seg,img)
+        self.kl = self.kl_divergence_(seg,img)
         self.reconstruction = self.reconstruct(seg,img,mean=False)
 
-        #Here we use the posterior sample sampled above
         self.loss_ce=F.cross_entropy(self.reconstruction, seg[:, 0].long())
         self.reconstruction_loss = torch.sum(self.loss_ce)
         self.mean_reconstruction_loss = torch.mean(self.loss_ce)
@@ -615,21 +504,23 @@ input_channels = tuple([1])+tuple([i for i in default_channels_per_block])
 
 channels_per_block = default_channels_per_block
 down_channels_per_block = tuple([i / 2 for i in default_channels_per_block])
-net=Hierarchical_Core(dim=2,input_channels=list(input_channels),channels_per_block=list(channels_per_block),
-               down_channels_per_block=list(down_channels_per_block), convs_per_block=3,
-               blocks_per_level=3,Posterior=False)
+#net=Hierarchical_Core(dim=2,input_channels=list(input_channels),channels_per_block=list(channels_per_block),
+#               down_channels_per_block=list(down_channels_per_block), convs_per_block=3,
+#               blocks_per_level=3,Posterior=False)
 
-HPUnetscri=StitchingDecoder(dim=2,latent_dims=[1,1,1,1],input_channels=list(input_channels),channels_per_block=list(channels_per_block),num_classes=6,
+#HPUnetscri=StitchingDecoder(dim=2,latent_dims=[1,1,1,1],input_channels=list(input_channels),channels_per_block=list(channels_per_block),num_classes=6,
+#               down_channels_per_block=list(down_channels_per_block), convs_per_block=3,
+#               blocks_per_level=3)
+
+
+net=HierarchicalProbUNet(dim=3,latent_dims=[1,1,1,1],input_channels=list(input_channels),channels_per_block=list(channels_per_block),num_classes=2,
                down_channels_per_block=list(down_channels_per_block), convs_per_block=3,
                blocks_per_level=3)
-
-
-HPUnet=HierarchicalProbUNet(dim=2,latent_dims=[1,1,1,1],input_channels=list(input_channels),channels_per_block=list(channels_per_block),num_classes=6,
-               down_channels_per_block=list(down_channels_per_block), convs_per_block=3,
-               blocks_per_level=3)
+#print(net)
+#print(HPUnet.parameters())               
 #print(HPUnet)
 #print(HPUnetscri)
-# sample=HPUnet.sample(torch.ones(1,1,128,128),mean=True,z_q=None)
+#sample=HPUnet.sample(torch.ones(2,1,128,128,128).cuda(),mean=True,z_q=None)
 # print(sample.shape)
 # reconstruction=HPUnet.reconstruct(torch.randn(1,6,128,128),torch.ones(1,1,128,128),mean=True)
 # print(reconstruction.shape,reconstruction)
@@ -637,14 +528,31 @@ HPUnet=HierarchicalProbUNet(dim=2,latent_dims=[1,1,1,1],input_channels=list(inpu
 # print(sample)
 # HPUnetscri.forward(torch.ones(1,1,128,128))
 # summary(HPUnetscri.cuda(),input_size=[(1,128,128)])
-# summary(HPUnet.cuda(),input_size=[(1,128,128),(1,128,128)])
-# summary(HPUnet.cuda(),input_size=[(1,128,128)])
+#summary(HPUnet.cuda(),input_size=[(1,128,128),(1,128,128)])
+#summary(HPUnet.cuda(),input_size=[(1,128,128)])
 
-# k_l=HPUnet.kl(torch.randn(1,6,128,128),torch.ones(1,1,128,128))
-# print(k_l)
-elbo=HPUnet.elbo(torch.ones(1,6,128,128),torch.ones(1,1,128,128))
-print(elbo)
+#k_l=HPUnet.kl(torch.randn(2,6,128,128,128).cuda(),torch.ones(2,1,128,128,128).cuda())
+#print(k_l)
+#elbo=HPUnet.elbo(torch.ones(1,6,128,128,128),torch.ones(1,1,128,128,128))
+#print(elbo)
 
+
+#dummy train loop for debugging purpose
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+net.to(device)
+optimizer = torch.optim.Adam(net.parameters(), lr=1e-4, weight_decay=0)
+epochs = 10
+for epoch in range(epochs):
+        print("Numbers epoch:",epoch)
+        elbo = net.elbo(torch.ones(1,2,128,128,128).to(device),torch.randn(1,1,128,128,128).to(device))
+        loss = -elbo + 1e-5 
+        print(loss)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+sample = net.sample(torch.randn(1,1,128,128,128).cuda(),mean=True,z_q=None)
+print(sample,sample.shape,"Sample shape")
 
 
 

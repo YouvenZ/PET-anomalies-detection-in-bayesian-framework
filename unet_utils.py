@@ -4,6 +4,8 @@ from torch.autograd import Variable
 import numpy as np
 from utils import init_weights
 from torchsummary import summary
+import torch.nn.functional as F
+
 
 
 base_channels = 24
@@ -86,7 +88,7 @@ class Residual_block(nn.Module):
         self.conv_per_block=conv_per_block
         self.input_channels = input_channels
         conv = NDConvGenerator(self.dim)
-        self.relu = nn.ReLU(inplace=True) if relu == 'relu' else nn.LeakyReLU(inplace=True)
+        self.pre_activation_relu = nn.ReLU(inplace=False) if relu == 'relu' else nn.LeakyReLU(inplace=False)
 
         if n_down_channels is None:
             n_down_channels = n_channels_in
@@ -104,7 +106,7 @@ class Residual_block(nn.Module):
     def forward(self,x):
         skip = x
 
-        residual = self.relu(x)
+        residual = self.pre_activation_relu(x)
         # print("shape: residual ",residual.shape)
         Fconv = self.first_conv(residual)
         # print("shape: Fconv ",Fconv.shape)
@@ -116,7 +118,7 @@ class Residual_block(nn.Module):
 
 
             if i < self.conv_per_block - 2:
-                Fconv = self.relu(Fconv)
+                Fconv = F.relu(Fconv)
   
 
 
@@ -148,6 +150,39 @@ class Interpolate(nn.Module):
         x = self.interp(x, scale_factor=self.scale_factor, mode=self.mode, align_corners=False)
         return x
 
+
+
+class Probabilistic_block(nn.Module):
+    def __init__(self,dim,channels_per_block=None):
+
+        super(Probabilistic_block,self).__init__()
+
+        self.dim = dim
+        conv = NDConvGenerator(self.dim)
+        self._latent_dims = (1,1,1,1)
+        self._channels_per_block = channels_per_block
+        self.num_latent_levels = len(self._latent_dims)
+
+    
+        self.probabilistic_layers=[]
+   
+
+        ##### Probabilistic blocks
+        self.probabilistic_layers.append(conv(self._channels_per_block[-1], 2*self._latent_dims[0], ks=1, stride=1, norm=None, relu=None))
+        for level in range(1,self.num_latent_levels):
+            latent_dims = self._latent_dims[level]
+            self.probabilistic_layers.append(conv(2*latent_dims, 2*latent_dims, ks=1, stride=1, norm=None, relu=None))
+
+        self.probabilistic_layers = nn.Sequential(*self.probabilistic_layers)
+        
+    def forward(self,x):
+        out = self.probabilistic_layers(x)
+        return out
+
+
+
+# net=Probabilistic_block(dim=2,channels_per_block=channels_per_block)
+# print(net)
 
 # inter_net = Interpolate(scale_factor=2,mode="bilinear")
 # tensor=inter_net.forward(torch.ones(1,16,16,16))
