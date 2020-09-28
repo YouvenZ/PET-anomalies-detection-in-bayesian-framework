@@ -35,3 +35,78 @@ for epoch in range(epochs):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+
+
+checkpoint_path = './chkpoint_'
+best_model_path = './bestmodel.pt'
+device = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')
+net.to(device)
+net.train()
+optimizer = torch.optim.Adam(net.parameters(), lr=1e-4, weight_decay=0)
+epochs = 10
+
+valid_loss_min=float('inf')
+train_loss,val_loss=[],[]
+dice_score_train,dice_score_val=[],[]
+
+
+for epoch in range(epochs):
+    running_train_loss = []
+    running_train_score = []
+    print('Numbers of epoch:{}/{}'.format(epoch+1,epochs))
+    starded = time.time()
+          
+    for batch_idx, (data, target) in enumerate(train_loader):
+        #print('Batch idx {}, data shape {}, target shape {}'.format(batch_idx, data.shape, target.shape))
+        elbo = net.elbo(target.to(device),data.to(device))
+        reg_loss = l2_regularisation(net._prior)+l2_regularisation(net._posterior)+l2_regularisation(net._f_comb)
+        loss = -elbo + 1e-5*reg_loss
+        score = batch_dice(F.softmax(net.sample(data,mean=False)))
+        #running_loss += loss.item() * inputs.size(0) 
+        #print(loss) 
+        optimizer.zero_grad() 
+        loss.backward() 
+        optimizer.step() 
+        running_train_loss.append(loss.item())
+        running_train_score.append(score.item())
+        print('loss batch: {},score batch: {}, batch_idx: {}'.format(loss.item(),score.item(),batch_idx))
+    else:
+        running_val_loss=[]
+        running_val_score=[]
+          
+        with torch.no_grad():
+            for data,target in val_loader:
+          
+                elbo = net.elbo(target.to(device),data.to(device))
+                reg_loss = l2_regularisation(net._prior)+l2_regularisation(net._posterior)+l2_regularisation(net._f_comb)
+                loss = -elbo + 1e-5*reg_loss
+                score = batch_dice(F.softmax(net.sample(data,mean=False)))
+                running_train_loss.append(loss.item())
+                running_train_score(score.item())
+        
+    epoch_train_loss,epoch_train_score = np.mean(running_train_loss),np.mean(running_train_score)
+    print('Train loss : {} Dice score : {}'.format(epoch_train_loss,epoch_train_score)
+    train_loss.append(epoch_train_loss)
+    dice_score_train.append(epoch_train_score)
+        
+    epoch_val_loss,epoch_val_score = np.mean(running_val_loss),np.mean(running_val_score)
+    print('Train loss : {} Dice score : {}'.format(epoch_val_loss,epoch_val_score)
+    val_loss.append(epoch_val_loss)
+    dice_score_val.append(epoch_val_score)
+          
+    checkpoint = { 'epoch': epoch +1,
+                  'valid_loss_min':epoch_val_loss,
+                  'state_dict':net.state_dict(),
+                  'optimizer':optimizer.state_dict(),
+        
+    }
+    save_ckp(checkpoint, False,checkpoint_path,best_model_path)
+     
+    if epoch_val_loss <= valid_loss_min:
+          print('Validation loss decreased ({:.6f} =======> {:.6f}). Saving model ...'.format(valid_loss_min,epoch_val_loss))
+          
+          save_ckp(checkpoint, True,checkpoint_path,best_model_path)
+          valid_loss_min=epoch_val_loss
+          
+    time_passed = time.time() - started
+    print('{:.0f}m {:.0f}s'.format(time_passed//60, time_passed%60))

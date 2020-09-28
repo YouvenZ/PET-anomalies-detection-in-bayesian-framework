@@ -1,0 +1,4 @@
+[0829/212923.485:ERROR:minidumpwritedump_with_crashpad_info.cc(452)] Failed to call MiniDumpWriteDump: Le fichier de pagination est insuffisant pour terminer cette opération. (0x800705AF)
+[0829/212923.486:ERROR:minidumpwritedump_with_crashpad_info.cc(661)] Failed to write minidump file
+[0829/212923.486:ERROR:crash_report_exception_handler.cc(132)] TryMiniDumpWriteDumpWithCrashpadInfo failed
+[0829/212923.496:ERROR:process_info.cc(359)] UncheckedAllocate

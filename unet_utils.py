@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from torch.autograd import Variable
 import numpy as np
-from utils import init_weights
+from utils import init_weights,init_weights_orthogonal_normal
 from torchsummary import summary
 import torch.nn.functional as F
 
@@ -45,25 +45,31 @@ class NDConvGenerator(object):
         """
         if self.dim == 2:
             conv = nn.Conv2d(c_in, c_out, kernel_size=ks, padding=pad, stride=stride)
+            conv.apply(init_weights_orthogonal_normal)
+
             if norm is not None:
                 if norm == 'instance_norm':
                     norm_layer = nn.InstanceNorm2d(c_out)
-                elif norm == 'batch_norm':
+                elif norm == None:
                     norm_layer = nn.BatchNorm2d(c_out)
                 else:
                     raise ValueError('norm type as specified in configs is not implemented...')
                 conv = nn.Sequential(conv, norm_layer)
+                conv.apply(init_weights_orthogonal_normal)
 
         else:
             conv = nn.Conv3d(c_in, c_out, kernel_size=ks, padding=pad, stride=stride)
+            conv.apply(init_weights_orthogonal_normal)
             if norm is not None:
                 if norm == 'instance_norm':
                     norm_layer = nn.InstanceNorm3d(c_out)
-                elif norm == 'batch_norm':
+                elif norm == None:
                     norm_layer = nn.BatchNorm3d(c_out)
                 else:
                     raise ValueError('norm type as specified in configs is not implemented... {}'.format(norm))
                 conv = nn.Sequential(conv, norm_layer)
+                conv.apply(init_weights_orthogonal_normal)
+            
 
         if relu is not None:
             if relu == 'relu':
@@ -73,6 +79,7 @@ class NDConvGenerator(object):
             else:
                 raise ValueError('relu type as specified in configs is not implemented...')
             conv = nn.Sequential(conv, relu_layer)
+            conv.apply(init_weights_orthogonal_normal)
 
         return conv
 
@@ -95,12 +102,13 @@ class Residual_block(nn.Module):
 
         
 
-        self.first_conv = conv(self.input_channels, self.n_down_channels, ks=3, stride=stride,pad=1, norm=None, relu=None)
-        self.convs= nn.ModuleList([conv(self.n_down_channels, self.n_down_channels, ks=3, stride=stride, pad=1, norm=None, relu="relu") for _ in range(conv_per_block-1)])
+        self.first_conv = conv(self.input_channels, self.n_down_channels, ks=3, stride=stride,pad=1, norm=norm, relu=None)
+        self.convs= nn.ModuleList([conv(self.n_down_channels, self.n_down_channels, ks=3, stride=stride, pad=1, norm=norm, relu="relu") for _ in range(conv_per_block-1)])
+    
 
 
-        self.conv_skip = conv(self.input_channels, self.n_channels_in, ks=1, stride=stride, norm=None, relu=None)
-        self.conv_residual = conv(self.n_down_channels, self.n_channels_in, ks=1, stride=stride, norm=None, relu=None)
+        self.conv_skip = conv(self.input_channels, self.n_channels_in, ks=1, stride=stride, norm=norm, relu=None)
+        self.conv_residual = conv(self.n_down_channels, self.n_channels_in, ks=1, stride=stride, norm=norm, relu=None)
         
 
     def forward(self,x):
